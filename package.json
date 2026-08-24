@@ -1,0 +1,19 @@
+{
+  "name": "surat-jalan-megumi",
+  "version": "1.0.0",
+  "description": "Sistem Surat Jalan PPIC & Marketing PT Megumi Brayan Indonesia",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cloudinary": "^1.41.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "exceljs": "^4.3.0",
+    "express": "^4.22.2",
+    "mongoose": "^9.9.3",
+    "multer": "^2.2.0",
+    "multer-storage-cloudinary": "^4.0.0"
+  }
+}
