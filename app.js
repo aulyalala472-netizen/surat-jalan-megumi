@@ -1,12 +1,12 @@
 // Variable Global Penanda Mode Edit & Kamera
-let editModeNoSurat = null; // null = Mode Tambah Baru, String/ID = Mode Edit
+let editModeNoSurat = null; // null = Mode Tambah Baru, String/ID = Mode Edit (_id)
 let activeRowForCamera = null;
 let mediaStreamTrack = null;
 
-// Storage Lokal sebagai fallback jika Server/API tidak tersedia
+// Storage Lokal Persisten (Mencegah data hilang saat offline / tanpa API)
 const LOCAL_STORAGE_KEY = 'surat_jalan_db_mbi';
 
-// --- MASTER DATA ---
+// --- MASTER DATA LENGKAP ---
 const MASTER_DATA = {
     "CV. CITRA PERKASA": [
         { part: "LONG 1001 NUT 12 M3", spek: "WHITE", harga: 4000, unit: "KG" },
@@ -117,7 +117,7 @@ const MASTER_DATA = {
         { part: "MIO 12,5X11,1 (8 GRAM)", spek: "YELLOW", harga: 5500, unit: "KG" },
         { part: "BEAT KARBU (6 GRAM)", spek: "YELLOW", harga: 5500, unit: "KG" },
         { part: "17x13,4 x 13,5 (10 GR)", spek: "YELLOW", harga: 5500, unit: "KG" },
-        { part: "12,5x16,2 (8 GR)", spek: "BLACK", harga: 12000, unit: "KG"}
+        { part: "12,5x16,2 (8 GR)", spek: "BLACK", harga: 12000, unit: "KG" }
     ],
     "PT. MEGA WAJA CORPORINDO": [
         { part: "JF/MS M6X15", spek: "PUTIH", harga: 2500, unit: "KG" },
@@ -210,12 +210,13 @@ document.addEventListener('DOMContentLoaded', () => {
     switchTab('PPIC');
 });
 
-// --- LOCALSTORAGE DATA HANDLER (UNTUK AKSES TANPA API SERVER) ---
+// --- LOCALSTORAGE DATA HANDLER ---
 function getLocalData() {
     try {
         const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
         return raw ? JSON.parse(raw) : [];
     } catch(e) {
+        console.error("Gagal membaca LocalStorage:", e);
         return [];
     }
 }
@@ -224,11 +225,28 @@ function saveLocalData(data) {
     try {
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
     } catch(e) {
-        console.error("Gagal simpan lokal:", e);
+        console.error("Gagal simpan ke LocalStorage:", e);
     }
 }
 
-// --- HELPER UPLOAD FOTO KE CLOUD / LOCAL BASE64 ---
+// Fetch data dengan fallback local storage jika server offline
+async function fetchSuratJalanData(divisi) {
+    try {
+        const response = await fetch(`/api/surat-jalan?divisi=${divisi}`);
+        if (response.ok) {
+            const serverData = await response.json();
+            if (Array.isArray(serverData) && serverData.length > 0) {
+                return serverData.filter(i => (i.divisi || 'PPIC') === divisi);
+            }
+        }
+    } catch (e) {
+        console.warn("API Server offline, mengambil dari LocalStorage...");
+    }
+    const local = getLocalData();
+    return local.filter(i => (i.divisi || 'PPIC') === divisi);
+}
+
+// --- HELPER UPLOAD FOTO ---
 async function uploadFileToCloud(fileOrBlob) {
     try {
         const formData = new FormData();
@@ -244,10 +262,9 @@ async function uploadFileToCloud(fileOrBlob) {
             return data.url;
         }
     } catch (e) {
-        console.warn('Endpoint API Upload tidak ditemukan, beralih ke Base64 lokal...');
+        console.warn('API Upload offline, menggunakan pembacaan gambar lokal...');
     }
 
-    // Fallback: Convert ke Base64 DataURL jika API Server tidak tersedia
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result);
@@ -256,7 +273,7 @@ async function uploadFileToCloud(fileOrBlob) {
     });
 }
 
-// --- HELPER KAMERA & FOTO ---
+// --- KAMERA & FOTO HANDLERS ---
 async function openCamera(btn) {
     activeRowForCamera = btn.closest('.item-row');
     const modal = document.getElementById('cameraModal');
@@ -271,7 +288,7 @@ async function openCamera(btn) {
         mediaStreamTrack = stream.getVideoTracks()[0];
         modal.classList.remove('hidden');
     } catch (err) {
-        alert('Gagal mengakses kamera. Pastikan Anda telah mengizinkan akses kamera!');
+        alert('Gagal mengakses kamera. Pastikan izin kamera aktif!');
         console.error("Camera error:", err);
     }
 }
@@ -279,9 +296,7 @@ async function openCamera(btn) {
 function openGallery(btn) {
     const row = btn.closest('.item-row');
     const fileInput = row.querySelector('.file-input');
-    if (fileInput) {
-        fileInput.click();
-    }
+    if (fileInput) fileInput.click();
 }
 
 async function capturePhoto() {
@@ -298,7 +313,6 @@ async function capturePhoto() {
     canvas.toBlob(async (blob) => {
         try {
             const cloudUrl = await uploadFileToCloud(blob);
-
             const imgDataInput = activeRowForCamera.querySelector('.foto-data');
             const previewContainer = activeRowForCamera.querySelector('.foto-preview-container');
             const previewImg = activeRowForCamera.querySelector('.foto-preview');
@@ -363,9 +377,8 @@ function initCustomerDropdown() {
     const custDatalist = document.getElementById('customerList');
     custDatalist.innerHTML = '';
     
-    // Gabungkan Master Data dengan customer baru yang pernah diinput
     const localData = getLocalData();
-    const localCusts = localData.map(d => d.customer).filter(Boolean);
+    const localCusts = localData.map(d => d.customer || d.mitra).filter(Boolean);
     const allCustomers = [...new Set([...Object.keys(MASTER_DATA), ...localCusts])];
 
     allCustomers.forEach(cust => {
@@ -470,10 +483,10 @@ function addItemRow() {
                 <input type="hidden" class="foto-data">
                 <input type="file" accept="image/*" class="hidden file-input" onchange="handleFileUpload(this)">
                 
-                <button type="button" onclick="openCamera(this)" class="bg-blue-100 hover:bg-blue-600 text-blue-600 hover:text-white px-2 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1" title="Ambil Foto Kamera">
+                <button type="button" onclick="openCamera(this)" class="bg-blue-100 hover:bg-blue-600 text-blue-600 hover:text-white px-2 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1">
                     <i class="fa-solid fa-camera"></i> <span class="hidden sm:inline">Kamera</span>
                 </button>
-                <button type="button" onclick="openGallery(this)" class="bg-emerald-100 hover:bg-emerald-600 text-emerald-700 hover:text-white px-2 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1" title="Pilih dari Galeri">
+                <button type="button" onclick="openGallery(this)" class="bg-emerald-100 hover:bg-emerald-600 text-emerald-700 hover:text-white px-2 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1">
                     <i class="fa-solid fa-image"></i> <span class="hidden sm:inline">Galeri</span>
                 </button>
             </div>
@@ -482,7 +495,7 @@ function addItemRow() {
         <div class="foto-preview-container hidden flex items-center gap-2 bg-white p-1.5 rounded-lg border border-gray-200 w-fit">
             <img class="foto-preview h-10 w-10 object-cover rounded-md border">
             <span class="text-[10px] text-emerald-600 font-bold"><i class="fa-solid fa-circle-check"></i> Gambar terlampir</span>
-            <button type="button" onclick="removePhoto(this)" class="text-red-500 hover:text-red-700 font-bold text-xs ml-1" title="Hapus Gambar">&times;</button>
+            <button type="button" onclick="removePhoto(this)" class="text-red-500 hover:text-red-700 font-bold text-xs ml-1">&times;</button>
         </div>
 
         <div class="grid grid-cols-12 gap-2 items-center">
@@ -513,7 +526,6 @@ function removeItemRow(btn) {
 
 function updateFormTotals() {
     let grandTotal = 0;
-
     document.querySelectorAll('.item-row').forEach(row => {
         const qty = parseFloat(row.querySelector('.jumlah-qty').value) || 0;
         const hargaElem = row.querySelector('.harga-satuan');
@@ -540,8 +552,10 @@ function resetEditMode() {
     
     if (divisi === 'PPIC') {
         btnSubmit.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Simpan Surat Jalan Masuk';
+        btnSubmit.className = "w-full mt-4 bg-gradient-to-r from-red-700 to-red-800 hover:from-red-800 hover:to-red-900 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-wider transition duration-200 shadow-lg shadow-red-700/30 flex items-center justify-center gap-2";
     } else {
         btnSubmit.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Simpan Surat Jalan Keluar';
+        btnSubmit.className = "w-full mt-4 bg-gradient-to-r from-red-800 to-red-900 hover:from-red-900 hover:to-red-950 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-wider transition duration-200 shadow-lg shadow-red-900/30 flex items-center justify-center gap-2";
     }
 }
 
@@ -553,7 +567,6 @@ function switchTab(divisi) {
     const formTitle = document.getElementById('formTitle');
     const formSubtitle = document.getElementById('formSubtitle');
     const badgeDivisi = document.getElementById('badgeDivisi');
-    const btnSubmit = document.getElementById('btnSubmit');
     const tableTitle = document.getElementById('tableTitle');
     const formTotalContainer = document.getElementById('formTotalContainer');
     const thHarga = document.getElementById('thHarga');
@@ -565,16 +578,15 @@ function switchTab(divisi) {
         document.getElementById('tipeAktif').value = 'MASUK';
         tabPpic.className = "px-5 py-2.5 text-xs font-bold rounded-xl transition-all duration-300 flex items-center gap-2 bg-white text-red-900 shadow-md";
         tabMarketing.className = "px-5 py-2.5 text-xs font-bold rounded-lg transition-all duration-300 flex items-center gap-2 text-red-100 hover:text-white hover:bg-red-800/60";
-        formHeaderBg.className = "bg-gradient-to-r from-red-700 to-red-600 px-6 py-4 text-white flex justify-between items-center";
+        if (formHeaderBg) formHeaderBg.className = "bg-gradient-to-r from-red-700 to-red-600 px-6 py-4 text-white flex justify-between items-center";
         
-        formTitle.innerHTML = '<i class="fa-solid fa-file-pen"></i> Form Surat Jalan Masuk';
-        formSubtitle.innerText = "Input data transaksi penerimaan barang";
-        badgeDivisi.innerText = "MASUK";
-        btnSubmit.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Simpan Surat Jalan Masuk';
-        btnSubmit.className = "w-full mt-4 bg-gradient-to-r from-red-700 to-red-800 hover:from-red-800 hover:to-red-900 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-wider transition duration-200 shadow-lg shadow-red-700/30 flex items-center justify-center gap-2";
-        tableTitle.innerHTML = '<i class="fa-solid fa-clock-rotate-left text-red-600"></i> Riwayat Surat Jalan Masuk';
+        if (formTitle) formTitle.innerHTML = '<i class="fa-solid fa-file-pen"></i> Form Surat Jalan Masuk';
+        if (formSubtitle) formSubtitle.innerText = "Input data transaksi penerimaan barang";
+        if (badgeDivisi) badgeDivisi.innerText = "MASUK";
+        if (tableTitle) tableTitle.innerHTML = '<i class="fa-solid fa-clock-rotate-left text-red-600"></i> Riwayat Surat Jalan Masuk';
 
-        document.getElementById('no_surat').placeholder = "SJ-IN/2026/001";
+        const noSuratInput = document.getElementById('no_surat');
+        if (noSuratInput) noSuratInput.placeholder = "SJ-IN/2026/001";
 
         if (formTotalContainer) formTotalContainer.style.display = 'none';
         if (thHarga) thHarga.style.display = 'none';
@@ -583,16 +595,15 @@ function switchTab(divisi) {
         document.getElementById('tipeAktif').value = 'KELUAR';
         tabMarketing.className = "px-5 py-2.5 text-xs font-bold rounded-xl transition-all duration-300 flex items-center gap-2 bg-white text-red-900 shadow-md";
         tabPpic.className = "px-5 py-2.5 text-xs font-bold rounded-lg transition-all duration-300 flex items-center gap-2 text-red-100 hover:text-white hover:bg-red-800/60";
-        formHeaderBg.className = "bg-gradient-to-r from-red-900 to-red-800 px-6 py-4 text-white flex justify-between items-center";
+        if (formHeaderBg) formHeaderBg.className = "bg-gradient-to-r from-red-900 to-red-800 px-6 py-4 text-white flex justify-between items-center";
 
-        formTitle.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Form Surat Jalan Keluar';
-        formSubtitle.innerText = "Input data transaksi pengiriman barang";
-        badgeDivisi.innerText = "KELUAR";
-        btnSubmit.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Simpan Surat Jalan Keluar';
-        btnSubmit.className = "w-full mt-4 bg-gradient-to-r from-red-800 to-red-900 hover:from-red-900 hover:to-red-950 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-wider transition duration-200 shadow-lg shadow-red-900/30 flex items-center justify-center gap-2";
-        tableTitle.innerHTML = '<i class="fa-solid fa-clock-rotate-left text-red-700"></i> Riwayat Surat Jalan Keluar';
+        if (formTitle) formTitle.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Form Surat Jalan Keluar';
+        if (formSubtitle) formSubtitle.innerText = "Input data transaksi pengiriman barang";
+        if (badgeDivisi) badgeDivisi.innerText = "KELUAR";
+        if (tableTitle) tableTitle.innerHTML = '<i class="fa-solid fa-clock-rotate-left text-red-700"></i> Riwayat Surat Jalan Keluar';
 
-        document.getElementById('no_surat').placeholder = "SJ-OUT/2026/001";
+        const noSuratInput = document.getElementById('no_surat');
+        if (noSuratInput) noSuratInput.placeholder = "SJ-OUT/2026/001";
 
         if (formTotalContainer) formTotalContainer.style.display = 'flex';
         if (thHarga) thHarga.style.display = 'table-cell';
@@ -604,31 +615,24 @@ function switchTab(divisi) {
     loadTableData();
 }
 
-// --- MEMUAT TABEL & AKSI EDIT/DELETE ---
-async function fetchSuratJalanData(divisi) {
-    try {
-        const res = await fetch(`/api/surat-jalan?divisi=${divisi}`);
-        if (res.ok) {
-            return await res.json();
-        }
-    } catch(e) {
-        console.warn('API Server offline, mengambil data lokal...');
-    }
-    // Fallback data lokal jika server/API offline
-    const local = getLocalData();
-    return local.filter(item => item.divisi === divisi);
-}
-
+// --- MEMUAT TABEL & URUTKAN BERDASARKAN TANGGAL ---
 async function loadTableData() {
     try {
         const divisi = document.getElementById('divisiAktif').value;
-        const data = await fetchSuratJalanData(divisi);
+        let data = await fetchSuratJalanData(divisi);
+        
+        if (Array.isArray(data)) {
+            data.sort((a, b) => new Date(b.tanggal) - new Date(a.tanggal));
+        } else {
+            data = [];
+        }
+
         const tbody = document.getElementById('tableBody');
         tbody.innerHTML = '';
 
-        document.getElementById('totalBadge').innerText = `${data ? data.length : 0} Dokumen`;
+        document.getElementById('totalBadge').innerText = `${data.length} Dokumen`;
 
-        if (!Array.isArray(data) || data.length === 0) {
+        if (data.length === 0) {
             tbody.innerHTML = `
                 <tr>
                     <td colspan="${divisi === 'PPIC' ? '9' : '10'}" class="p-8 text-center text-gray-400">
@@ -640,7 +644,7 @@ async function loadTableData() {
         }
 
         data.forEach(item => {
-            const idKey = item._id || item.no_surat;
+            const idKey = item._id || ('local_' + Math.random());
             const totalHargaSJ = item.items ? item.items.reduce((acc, curr) => acc + ((parseFloat(curr.qty) || 0) * (parseFloat(curr.harga) || 0)), 0) : 0;
             
             const namaBarangList = item.items ? item.items.map(i => i.nama_barang || '-').join('<br>') : '-';
@@ -652,19 +656,12 @@ async function loadTableData() {
                 return ket + fotoHtml;
             }).join('<br><div class="my-1 border-b border-gray-100"></div>') : '-';
 
-            const qtyPcsList = item.items ? item.items.map(i => {
-                const isPcs = (i.satuan || '').toLowerCase() === 'pcs';
-                return isPcs ? `${i.qty || 0} Pcs` : '-';
-            }).join('<br>') : '-';
-
-            const qtyKgList = item.items ? item.items.map(i => {
-                const isKg = (i.satuan || '').toLowerCase() === 'kg';
-                return isKg ? `${i.qty || 0} Kg` : '-';
-            }).join('<br>') : '-';
+            const qtyPcsList = item.items ? item.items.map(i => (i.satuan || '').toLowerCase() === 'pcs' ? `${i.qty || 0} Pcs` : '-').join('<br>') : '-';
+            const qtyKgList = item.items ? item.items.map(i => (i.satuan || '').toLowerCase() === 'kg' ? `${i.qty || 0} Kg` : '-').join('<br>') : '-';
 
             tbody.innerHTML += `
                 <tr class="bg-white hover:bg-red-50/50 transition-colors border-b border-gray-100 search-row">
-                    <td class="p-3 text-gray-600 align-top">${item.tanggal || '-'}</td>
+                    <td class="p-3 text-gray-600 font-semibold align-top">${item.tanggal || '-'}</td>
                     <td class="p-3 font-bold text-red-950 align-top">${item.no_surat || '-'}</td>
                     <td class="p-3 font-medium text-gray-800 align-top">${item.customer || item.mitra || '-'}</td>
                     <td class="p-3 text-gray-800 font-semibold align-top">${namaBarangList}</td>
@@ -691,20 +688,21 @@ async function loadTableData() {
     }
 }
 
+// --- AKSI EDIT & DELETE ---
 async function editSuratJalan(idOrNoSurat) {
     const decodedId = decodeURIComponent(idOrNoSurat);
     const divisi = document.getElementById('divisiAktif').value;
 
     try {
         const data = await fetchSuratJalanData(divisi);
-        const targetData = data.find(item => item._id === decodedId || item.no_surat === decodedId);
+        const targetData = data.find(item => item._id === decodedId) || data.find(item => item.no_surat === decodedId);
 
         if (!targetData) {
             alert('Data surat jalan tidak ditemukan.');
             return;
         }
 
-        editModeNoSurat = targetData._id || targetData.no_surat;
+        editModeNoSurat = targetData._id;
 
         document.getElementById('tanggal').value = targetData.tanggal || '';
         document.getElementById('no_surat').value = targetData.no_surat || '';
@@ -740,9 +738,7 @@ async function editSuratJalan(idOrNoSurat) {
                 lastRow.querySelector('.satuan').value = item.satuan || 'Kg';
 
                 const hargaInput = lastRow.querySelector('.harga-satuan');
-                if (hargaInput) {
-                    hargaInput.value = item.harga || 0;
-                }
+                if (hargaInput) hargaInput.value = item.harga || 0;
             });
         } else {
             addItemRow();
@@ -752,7 +748,6 @@ async function editSuratJalan(idOrNoSurat) {
 
         const btnSubmit = document.getElementById('btnSubmit');
         btnSubmit.innerHTML = '<i class="fa-solid fa-pen-to-square"></i> Update Surat Jalan';
-        
         window.scrollTo({ top: 0, behavior: 'smooth' });
 
     } catch (err) {
@@ -763,57 +758,97 @@ async function editSuratJalan(idOrNoSurat) {
 
 async function deleteSuratJalan(idOrNoSurat) {
     const decodedId = decodeURIComponent(idOrNoSurat);
-    if (!confirm(`Apakah Anda yakin ingin menghapus data surat jalan ini?`)) {
-        return;
-    }
+    if (!confirm('Apakah Anda yakin ingin menghapus data surat jalan ini?')) return;
 
     try {
-        let isSuccess = false;
-        try {
-            const res = await fetch(`/api/surat-jalan/${decodedId}`, { method: 'DELETE' });
-            if (res.ok) isSuccess = true;
-        } catch(e) {}
-
-        // Tetap hapus dari storage lokal jika server API tidak merespons
         let localData = getLocalData();
-        const initialLen = localData.length;
-        localData = localData.filter(i => (i._id !== decodedId && i.no_surat !== decodedId));
+        localData = localData.filter(i => i._id !== decodedId && i.no_surat !== decodedId);
         saveLocalData(localData);
 
-        if (isSuccess || localData.length !== initialLen) {
-            alert('Data berhasil dihapus!');
-            if (editModeNoSurat === decodedId) {
-                resetEditMode();
-                document.getElementById('formSuratJalan').reset();
-                resetItemContainer();
-            }
-            loadTableData();
+        await fetch(`/api/surat-jalan/${encodeURIComponent(decodedId)}`, {
+            method: 'DELETE'
+        });
+
+        alert('Data surat jalan berhasil dihapus.');
+        loadTableData();
+    } catch (err) {
+        console.error("Gagal menghapus data:", err);
+        alert('Gagal menghapus data surat jalan.');
+    }
+}
+
+// --- SUBMIT FORM ---
+document.getElementById('formSuratJalan').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const itemRows = document.querySelectorAll('.item-row');
+    const items = [];
+
+    itemRows.forEach(row => {
+        const hargaElem = row.querySelector('.harga-satuan');
+        items.push({
+            nama_barang: row.querySelector('.nama-barang')?.value || '',
+            spesifikasi: row.querySelector('.spesifikasi')?.value || '',
+            keterangan: row.querySelector('.keterangan')?.value || '',
+            foto: row.querySelector('.foto-data')?.value || '',
+            qty: parseFloat(row.querySelector('.jumlah-qty')?.value) || 0,
+            satuan: row.querySelector('.satuan')?.value || 'Kg',
+            harga: hargaElem ? (parseFloat(hargaElem.value) || 0) : 0
+        });
+    });
+
+    const isEdit = editModeNoSurat !== null;
+    const recordId = isEdit ? editModeNoSurat : 'sj_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+
+    const payload = {
+        _id: recordId,
+        divisi: document.getElementById('divisiAktif').value,
+        tipe: document.getElementById('tipeAktif').value,
+        tanggal: document.getElementById('tanggal').value,
+        no_surat: document.getElementById('no_surat').value,
+        customer: document.getElementById('customer').value,
+        items: items
+    };
+
+    let localData = getLocalData();
+    if (isEdit) {
+        const idx = localData.findIndex(i => i._id === recordId);
+        if (idx !== -1) {
+            localData[idx] = payload;
         } else {
-            alert('Gagal menghapus data.');
+            localData.push(payload);
+        }
+    } else {
+        localData.push(payload);
+    }
+    saveLocalData(localData);
+
+    try {
+        const url = isEdit ? `/api/surat-jalan/${encodeURIComponent(recordId)}` : '/api/surat-jalan';
+        const response = await fetch(url, {
+            method: isEdit ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            console.warn('Server menolak data, tersimpan sebagai data lokal browser.');
         }
     } catch (err) {
-        console.error("Error saat menghapus data:", err);
-        alert('Terjadi kesalahan saat menghapus data.');
+        console.warn('Backend API offline. Data tersimpan penuh di browser.');
     }
-}
 
-// --- FILTER & EXPORT EXCEL LANGSUNG DI BROWSER / AKSES ---
-function filterTable() {
-    const query = document.getElementById('searchInput').value.toLowerCase();
-    const rows = document.querySelectorAll('.search-row');
-    rows.forEach(row => {
-        const text = row.innerText.toLowerCase();
-        row.style.display = text.includes(query) ? '' : 'none';
-    });
-}
+    alert(isEdit ? 'Surat jalan berhasil diperbarui!' : 'Surat jalan berhasil disimpan!');
+    document.getElementById('formSuratJalan').reset();
+    document.getElementById('tanggal').value = new Date().toISOString().split('T')[0];
+    initCustomerDropdown();
+    resetEditMode();
+    resetItemContainer();
+    loadTableData();
+});
 
-// Client-Side Excel Export Generator via ExcelJS
+// --- EXPORT REKAPAN EXCEL ---
 async function generateExcelClient(divisi, filterBulan = null) {
-    if (typeof ExcelJS === 'undefined') {
-        alert("Library ExcelJS belum dimuat dengan sempurna! Pastikan koneksi internet stabil.");
-        return;
-    }
-
     let data = await fetchSuratJalanData(divisi);
 
     if (filterBulan) {
@@ -825,70 +860,66 @@ async function generateExcelClient(divisi, filterBulan = null) {
         return;
     }
 
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet(`Surat Jalan ${divisi}`);
+    data.sort((a, b) => new Date(a.tanggal) - new Date(b.tanggal));
 
-    // Definisi Kolom Excel
-    const columns = [
-        { header: 'Tanggal', key: 'tanggal', width: 14 },
-        { header: 'No Surat Jalan', key: 'no_surat', width: 20 },
-        { header: 'Customer / Vendor', key: 'customer', width: 28 },
-        { header: 'Nama Barang', key: 'nama_barang', width: 30 },
-        { header: 'Qty Pcs', key: 'qty_pcs', width: 12 },
-        { header: 'Qty Kg', key: 'qty_kg', width: 12 },
-        { header: 'Spesifikasi', key: 'spesifikasi', width: 20 },
-        { header: 'Keterangan', key: 'keterangan', width: 25 }
-    ];
+    const excelRows = [];
+    
+    excelRows.push({
+        "NO SURAT JALAN": "NO SURAT JALAN",
+        "TANGGAL SURAT JALAN": "TANGGAL SURAT JALAN",
+        "CUSTOMER": "CUSTOMER",
+        "NAMA BARANG": "NAMA BARANG",
+        "SPESIFIKASI": "SPESIFIKASI",
+        "KG": "KG",
+        "PCS": "PCS",
+        "TOTAL": "TOTAL",
+        "HARGA PCS": "HARGA PCS"
+    });
 
-    if (divisi !== 'PPIC') {
-        columns.push(
-            { header: 'Harga Satuan', key: 'harga', width: 15 },
-            { header: 'Total Harga', key: 'total_harga', width: 18 }
-        );
-    }
-
-    sheet.columns = columns;
-
-    // Tambah Data Baris per Baris Item
     data.forEach(item => {
         if (item.items && item.items.length > 0) {
-            item.items.forEach(subItem => {
-                const isPcs = (subItem.satuan || '').toLowerCase() === 'pcs';
-                const qtyVal = parseFloat(subItem.qty) || 0;
-                const hargaVal = parseFloat(subItem.harga) || 0;
+            item.items.forEach(sub => {
+                const isPcs = (sub.satuan || '').toLowerCase() === 'pcs';
+                const qtyVal = sub.qty || 0;
+                const hargaVal = sub.harga || 0;
+                const totalVal = qtyVal * hargaVal;
 
-                const rowData = {
-                    tanggal: item.tanggal || '',
-                    no_surat: item.no_surat || '',
-                    customer: item.customer || item.mitra || '',
-                    nama_barang: subItem.nama_barang || '',
-                    qty_pcs: isPcs ? qtyVal : '',
-                    qty_kg: !isPcs ? qtyVal : '',
-                    spesifikasi: subItem.spesifikasi || '',
-                    keterangan: subItem.keterangan || '',
-                    harga: hargaVal,
-                    total_harga: qtyVal * hargaVal
-                };
-                sheet.addRow(rowData);
+                excelRows.push({
+                    "NO SURAT JALAN": item.no_surat || '-',
+                    "TANGGAL SURAT JALAN": item.tanggal || '',
+                    "CUSTOMER": item.customer || item.mitra || '',
+                    "NAMA BARANG": sub.nama_barang || '-',
+                    "SPESIFIKASI": sub.spesifikasi || '-',
+                    "KG": !isPcs ? qtyVal : '',
+                    "PCS": isPcs ? qtyVal : '',
+                    "TOTAL": totalVal > 0 ? totalVal : '',
+                    "HARGA PCS": divisi !== 'PPIC' ? hargaVal : ''
+                });
             });
         }
     });
 
-    // Formatting Style Header Tabel
-    sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
-    sheet.getRow(1).fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: divisi === 'PPIC' ? 'B91C1C' : '991B1B' }
-    };
+    if (typeof XLSX !== 'undefined') {
+        const worksheet = XLSX.utils.json_to_sheet(excelRows, { skipHeader: true });
+        
+        worksheet['!cols'] = [
+            { wch: 18 },
+            { wch: 20 },
+            { wch: 30 },
+            { wch: 25 },
+            { wch: 18 },
+            { wch: 12 },
+            { wch: 12 },
+            { wch: 15 },
+            { wch: 15 }
+        ];
 
-    // Download File Excel di Browser
-    const buffer = await workbook.xlsx.writeBuffer();
-    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `Rekap_Surat_Jalan_${divisi}_${filterBulan || 'Semua'}.xlsx`;
-    link.click();
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, `${divisi}`);
+        XLSX.writeFile(workbook, `Surat_Jalan_${divisi}_${filterBulan || 'Rekap'}.xlsx`);
+    } else {
+        alert("Library Excel (XLSX) belum dimuat pada index.html!");
+    }
 }
 
 function exportExcel() {
@@ -906,82 +937,10 @@ function exportRekapBulanan() {
     }
 }
 
-// --- EVENT LISTENER SUBMIT FORM ---
-document.getElementById('formSuratJalan').addEventListener('submit', async (e) => {
-    e.preventDefault();
-
-    const itemRows = document.querySelectorAll('.item-row');
-    const items = [];
-
-    itemRows.forEach(row => {
-        const hargaElem = row.querySelector('.harga-satuan');
-        
-        items.push({
-            nama_barang: row.querySelector('.nama-barang')?.value || '',
-            spesifikasi: row.querySelector('.spesifikasi')?.value || '',
-            keterangan: row.querySelector('.keterangan')?.value || '',
-            foto: row.querySelector('.foto-data')?.value || '',
-            qty: parseFloat(row.querySelector('.jumlah-qty')?.value) || 0,
-            satuan: row.querySelector('.satuan')?.value || 'Kg',
-            harga: hargaElem ? (parseFloat(hargaElem.value) || 0) : 0
-        });
+function filterTable() {
+    const query = document.getElementById('searchInput').value.toLowerCase();
+    const rows = document.querySelectorAll('.search-row');
+    rows.forEach(row => {
+        row.style.display = row.innerText.toLowerCase().includes(query) ? '' : 'none';
     });
-
-    const payload = {
-        _id: editModeNoSurat || 'local_' + Date.now(),
-        divisi: document.getElementById('divisiAktif').value,
-        tipe: document.getElementById('tipeAktif').value,
-        tanggal: document.getElementById('tanggal').value,
-        no_surat: document.getElementById('no_surat').value,
-        customer: document.getElementById('customer').value,
-        items: items
-    };
-
-    const isEdit = editModeNoSurat !== null;
-    let savedSuccess = false;
-
-    // 1. Coba simpan ke Backend API jika tersedia
-    try {
-        const url = isEdit ? `/api/surat-jalan/${encodeURIComponent(editModeNoSurat)}` : '/api/surat-jalan';
-        const method = isEdit ? 'PUT' : 'POST';
-
-        const res = await fetch(url, {
-            method: method,
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        if (res.ok) {
-            savedSuccess = true;
-        }
-    } catch (err) {
-        console.warn('Backend API tidak tersambung. Menyimpan data ke Storage Lokal Browser...');
-    }
-
-    // 2. Simpan/Update selalu ke LocalStorage (memastikan data tetap dapat diakses & di-export)
-    let localData = getLocalData();
-    if (isEdit) {
-        const idx = localData.findIndex(i => i._id === editModeNoSurat || i.no_surat === editModeNoSurat);
-        if (idx !== -1) {
-            localData[idx] = payload;
-        } else {
-            localData.push(payload);
-        }
-    } else {
-        localData.push(payload);
-    }
-    saveLocalData(localData);
-    savedSuccess = true;
-
-    if (savedSuccess) {
-        alert(isEdit ? 'Surat jalan berhasil diperbarui!' : 'Surat jalan berhasil disimpan!');
-        document.getElementById('formSuratJalan').reset();
-        document.getElementById('tanggal').value = new Date().toISOString().split('T')[0];
-        initCustomerDropdown();
-        resetEditMode();
-        resetItemContainer();
-        loadTableData();
-    } else {
-        alert('Gagal menyimpan data.');
-    }
-});
+}
